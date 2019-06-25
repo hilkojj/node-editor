@@ -23,8 +23,10 @@ class NodeEditor
 
     void deleteNode(Node node);
 
+    bool isSelected(Node node);
+
   private:
-    bool hasFocus = false;
+    bool hasFocus = false, multiSelect = false;
     vec2 pos, drawPos;
     vec2 mousePos, prevMousePos;
     vec2 dragDelta;
@@ -47,14 +49,26 @@ class NodeEditor
     vec2 nodeSizeBeforeResizing;
 
     Node currentlyDragging;
-    vec2 nodePosBeforeDragging;
 
     void updateNode(int i);
     void drawNode(Node node, ImDrawList *drawList);
+    void resizeNode(Node node, ImDrawList *drawList);
+    void dragNode(Node node, ImDrawList *drawList, float dragBarRounding);
+    void drawNodeConnectors(Node node, ImDrawList *drawList);
+
+    void drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawList);
+
+    vec2 connectorPosition(Node node, NodeConnector c);
+    bool isInput(Node node, NodeConnector c);
 
     ImRect getNodeRectangle(Node node);
 
     void updateZoom();
+    void drawBackground(ImDrawList *drawList);
+    
+    bool selecting = false;
+    Nodes selectedNodes;
+    void updateSelection(ImDrawList *drawList);
 
 };
 

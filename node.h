@@ -15,14 +15,17 @@ struct NodeValueType_
 };
 typedef std::shared_ptr<NodeValueType_> NodeValueType;
 
+static NodeValueType createNodeValueType(NodeValueType_ x) { return std::make_shared<NodeValueType_>(x); }
+
 
 struct NodeConnector_
 {
     std::string name, description;
     NodeValueType valType;
-    bool multiple;
 };
 typedef std::shared_ptr<NodeConnector_> NodeConnector;
+
+static NodeConnector createNodeConnector(NodeConnector_ x) { return std::make_shared<NodeConnector_>(x); }
 
 
 struct NodeType_
@@ -31,20 +34,20 @@ struct NodeType_
 
     std::vector<NodeConnector> inputs, outputs;
 
-    bool sameOutputsAsInputs, canHaveChildren;
-
+    bool canHaveChildren;
 };
 typedef std::shared_ptr<NodeType_> NodeType;
+
+static NodeType createNodeType(NodeType_ x) { return std::make_shared<NodeType_>(x); }
 
 
 class Node_;
 typedef std::shared_ptr<Node_> Node;
 typedef std::vector<Node> Nodes;
 
-
-struct Input
+struct Connection
 {
-    Node sourceNode;
+    Node srcNode, dstNode;
     NodeConnector output;
 };
 
@@ -55,8 +58,12 @@ struct Node_
     vec2 position, size;
     bool collapsed = false;
 
-    std::vector<Input> inputs;
+    std::vector<NodeConnector> additionalInputs, additionalOutputs;
+
+    std::vector<Connection> connections;
     Nodes children;
 };
+
+static Node createNode(Node_ x) { return std::make_shared<Node_>(x); }
 
 #endif
