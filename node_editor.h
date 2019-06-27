@@ -6,18 +6,20 @@
 
 class NodeEditor
 {
-
   public:
+    static json copiedNodes;
+
     const std::string id;
 
     Nodes nodes;
+    std::vector<NodeValueType> valueTypes;
     std::vector<NodeType> nodeTypes;
 
     vec2 scroll;
     float zoom = 1;
     float zoomSpeed = 1;
     
-    NodeEditor(Nodes nodes, std::vector<NodeType> nodeTypes);
+    NodeEditor(Nodes nodes, std::vector<NodeType> nodeTypes, std::vector<NodeValueType> valueTypes);
 
     void draw(ImDrawList* drawList);
 
@@ -29,13 +31,15 @@ class NodeEditor
 
     bool containsLoop();
 
+    json toJson(Nodes nodes);
+
+    Nodes fromJson(json input, bool &success);
+
   private:
     bool hasFocus = false, multiSelect = false;
     vec2 pos, drawPos;
     vec2 mousePos, prevMousePos;
     vec2 dragDelta;
-
-    vec2 scrollBeforeDrag;
 
     // --- add node menu: ---
     std::string filter;
@@ -66,7 +70,7 @@ class NodeEditor
 
     vec2 connectorPosition(Node node, NodeConnector c);
     bool isInput(Node node, NodeConnector c);
-    bool isConencted(Node n, NodeConnector c);
+    bool isConnected(Node n, NodeConnector c);
 
     ImRect getNodeRectangle(Node node);
 
@@ -86,6 +90,8 @@ class NodeEditor
     std::vector<Connection> getInputConnections(Node n);
 
     bool detectLoopDfs(Node curr, Nodes &toVisit, Nodes &visiting, Nodes &visited);
+
+    NodeConnector connectorByName(Node n, std::string name);
 
 };
 

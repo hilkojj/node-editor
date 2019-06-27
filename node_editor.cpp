@@ -5,9 +5,12 @@
 #include "node_editor.h"
 
 int nodeEditorI = 0;
+json NodeEditor::copiedNodes = json();
 
-NodeEditor::NodeEditor(Nodes nodes, std::vector<NodeType> nodeTypes)
-    : nodes(nodes), nodeTypes(nodeTypes), id("node_editor_" + (nodeEditorI++)), addMenuId((id + "_add_menu").c_str())
+NodeEditor::NodeEditor(Nodes nodes, std::vector<NodeType> nodeTypes, std::vector<NodeValueType> valueTypes)
+    :
+    nodes(nodes), nodeTypes(nodeTypes), valueTypes(valueTypes),
+    id("node_editor_" + (nodeEditorI++)), addMenuId((id + "_add_menu").c_str())
 {
 }
 
@@ -71,7 +74,6 @@ void NodeEditor::draw(ImDrawList *drawList)
     // update scroll:
     if (ImGui::IsMouseDown(2) && hasFocus)
         scroll += mousePos - prevMousePos;
-    else scrollBeforeDrag = scroll;
 
     drawPos = pos / zoom + scroll;
 
@@ -95,8 +97,23 @@ void NodeEditor::draw(ImDrawList *drawList)
     {
         vec2 originPos = connectorPosition(creatingConnection->srcNode, creatingConnection->output);
         vec2 dstPos = (mousePos - scroll + drawPos) * zoom;
-        drawList->AddBezierCurve(originPos, originPos + vec2(120 * zoom, 0), dstPos - vec2(120 * zoom, 0), dstPos, ImColor(vec4(1)), zoom * 3);
+
+        float xDiff = abs(originPos.x - dstPos.x) * .6;
+        drawList->AddBezierCurve(originPos, originPos + vec2(xDiff, 0), dstPos - vec2(xDiff, 0), dstPos, ImColor(vec4(1)), zoom * 3);
     }
+
+    if (ImGui::IsKeyPressed(GLFW_KEY_DELETE))
+    {
+        if (selectedNodes.empty() && activeNode) deleteNode(activeNode);
+        else for (auto &n : selectedNodes) deleteNode(n);
+    }
+}
+
+bool shortcutPressed(int key0, int key1)
+{
+    return (ImGui::IsKeyPressed(key0, false) && ImGui::IsKeyPressed(key1, false))
+        || (ImGui::IsKeyPressed(key0, false) && ImGui::IsKeyDown(key1))
+        || (ImGui::IsKeyDown(key0) && ImGui::IsKeyPressed(key1, false));
 }
 
 void NodeEditor::updateSelection(ImDrawList *drawList)
@@ -117,6 +134,27 @@ void NodeEditor::updateSelection(ImDrawList *drawList)
 
     } // clear selection if user clicks on background:
     else if (ImGui::IsMouseDown(0) && !currentlyDragging && !currentlyResizing && !multiSelect) selectedNodes.clear();
+
+    if (shortcutPressed(GLFW_KEY_C, GLFW_KEY_LEFT_CONTROL))
+    {
+        NodeEditor::copiedNodes = toJson(isSelected(activeNode) ? selectedNodes : Nodes{activeNode});
+        std::cout << NodeEditor::copiedNodes << "\n";
+    }
+    if (shortcutPressed(GLFW_KEY_V, GLFW_KEY_LEFT_CONTROL))
+    {
+        bool success;
+        Nodes pasted = fromJson(copiedNodes, success);
+        for (Node n : pasted)
+        {
+            n->position += vec2(100, 100);
+            nodes.push_back(n);
+        }
+        if (!success) std::cout << "parsing nodes unsuccessful\n";
+        selectedNodes = pasted;
+        copiedNodes = toJson(pasted); // hack to give the next paste extra offset.
+    }
+    if (ImGui::IsKeyDown(GLFW_KEY_A) && ImGui::IsKeyDown(GLFW_KEY_LEFT_CONTROL))
+        selectedNodes = nodes;
 
     selecting = false;
     if (creatingConnection || currentlyDragging || currentlyResizing || dragDelta.x + dragDelta.y == 0 || !ImGui::IsMouseDown(0)) return;
@@ -199,9 +237,6 @@ void NodeEditor::drawNode(Node node, ImDrawList *drawList)
                 nodeRect.Min + vec2(20, 11) * zoom,
                 nodeRect.Min + vec2(15, 21) * zoom, ImColor(1.f, 1., 1., .5)
         );
-
-    if (active && ImGui::IsKeyPressed(GLFW_KEY_DELETE))
-        deleteNode(node);
 }
 
 void NodeEditor::resizeNode(Node node, ImDrawList *drawList)
@@ -268,7 +303,7 @@ void NodeEditor::dragNode(Node node, ImDrawList *drawList, float dragBarRounding
         else
         {
             currentlyDragging = NULL;
-            ImGui::SetTooltip(node->type->description.c_str());
+            ImGui::SetTooltip("%s", node->type->description.c_str());
 
             // collapse node if collapse-icon was clicked:
             ImRect collapseRect = ImRect(nodeRect.Min + vec2(8 * zoom), nodeRect.Min + vec2(24 * zoom));
@@ -296,18 +331,20 @@ void NodeEditor::drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawL
     // show type of connector when hovering:
     bool hoveringConnector = hasFocus && length(vec2(ImGui::GetMousePos()) - pos) < 15 * zoom;
 
-    if (hoveringConnector) ImGui::SetTooltip(c->valType->name.c_str());
+    bool draggingConnector = hasFocus && dragDelta.x + dragDelta.y != 0 && !currentlyDragging && !currentlyResizing
+                                && length(vec2(ImGui::GetMousePos() - dragDelta) - pos) < 15 * zoom;
 
-    if (hoveringConnector && dragDelta.x + dragDelta.y != 0)
+    if (hoveringConnector) ImGui::SetTooltip("%s", c->valType->name.c_str());
+
+    if (hoveringConnector || draggingConnector)
     {
         bool connIsInput = isInput(node, c); // is this connector on the left side of the node?
-        if (creatingConnection)
+        if (creatingConnection && hoveringConnector)
         {
-            std::cout << "j1\n";
             Connection connection = *creatingConnection;
             connection.dstNode = node;
             connection.input = c;
-            if (connIsInput && !isConencted(node, c))
+            if (connIsInput && !isConnected(node, c))
             {
                 connection.srcNode->connections.push_back(connection);
                 node->connections.push_back(connection);
@@ -319,23 +356,29 @@ void NodeEditor::drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawL
                     connection.srcNode->connections.pop_back();
                     node->connections.pop_back();
                 }
-                else
+                else creatingConnection = NULL;
+            }
+        }
+        else if (draggingConnector)
+        {
+            if (!connIsInput)
+                creatingConnection = std::make_unique<Connection>(Connection{
+                        node, NULL,
+                        c, NULL
+                });
+            else if (isConnected(node, c))
+            {
+                for (auto &connection : getInputConnections(node))
                 {
-                    creatingConnection = NULL;
-                    std::cout << "Connection created\n";
+                    if (connection.input != c) continue;
+                    deleteConnection(connection);
+                    creatingConnection = std::make_unique<Connection>(connection);
+                    creatingConnection->input = NULL;
+                    creatingConnection->dstNode = NULL;
                 }
             }
         }
-        else if (!connIsInput)
-        {
-            creatingConnection = std::make_unique<Connection>(Connection{
-                    node, NULL,
-                    c, NULL
-            });
-            std::cout << "starting connection creation\n";
-        }
     }
-
     if (node->collapsed) return;
     // show connector name:
     drawList->AddText(NULL, 13 * zoom, pos, ImColor(vec4(1)), c->name.c_str());
@@ -421,7 +464,7 @@ void NodeEditor::drawAddMenu()
             if (ImGui::IsKeyPressed(GLFW_KEY_BACKSPACE))
                 filter.pop_back();
 
-            ImGui::Text(("Filter: " + filter).c_str());
+            ImGui::Text("%s", ("Filter: " + filter).c_str());
         } else ImGui::Text("Add node");
         ImGui::Separator();
         addMenuSelectedI += ImGui::IsKeyPressed(GLFW_KEY_DOWN) ? 1 : (ImGui::IsKeyPressed(GLFW_KEY_UP) ? -1 : 0);
@@ -446,7 +489,7 @@ void NodeEditor::drawAddMenu()
                 ImGui::CloseCurrentPopup();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(nodeType->description.c_str());
+                ImGui::SetTooltip("%s", nodeType->description.c_str());
 
             i++;
         }
@@ -463,7 +506,7 @@ void NodeEditor::drawAddMenu()
     }
 }
 
-bool NodeEditor::isConencted(Node n, NodeConnector c)
+bool NodeEditor::isConnected(Node n, NodeConnector c)
 {
     for (auto &connection : getInputConnections(n))
         if (connection.input == c) return true;
@@ -477,10 +520,11 @@ void NodeEditor::drawConnections(ImDrawList *drawList)
     for (auto &n : nodes)
     {
         ImColor outlineColor = n == activeNode ? ImColor(.4f, .2, 1.) : ImColor(vec4(vec3(.3), 1));
-        for (auto &c : getOutputConnections(n))
+        for (auto &c : getInputConnections(n))
         {
-            vec2 p0 = connectorPosition(n, c.output), p1 = connectorPosition(c.dstNode, c.input);
-            vec2 p0b = p0 + vec2(120 * zoom, 0), p1b = p1 + vec2(-120 * zoom, 0);
+            vec2 p0 = connectorPosition(n, c.input), p1 = connectorPosition(c.srcNode, c.output);
+            float xDiff = abs(p0.x - p1.x) * .6;
+            vec2 p0b = p0 - vec2(xDiff, 0), p1b = p1 + vec2(xDiff, 0);
             drawList->AddBezierCurve(p0, p0b, p1b, p1, outlineColor, zoom * 4);
             drawList->AddBezierCurve(p0, p0b, p1b, p1, ImColor(vec4(1)), zoom * 2.5);
         }
@@ -543,5 +587,132 @@ void NodeEditor::deleteConnection(Connection &c)
             ), n->connections.end()
         );
     }
+}
+
+json NodeEditor::toJson(Nodes nodes)
+{
+    json out;
+    int id = 0;
+    for (Node n : nodes)
+    {
+        json nj;
+        nj["id"] = id++;
+        nj["type"] = n->type->name;
+        nj["sizeX"] = n->size.x;
+        nj["sizeY"] = n->size.y;
+        nj["posX"] = n->position.x;
+        nj["posY"] = n->position.y;
+        nj["collapsed"] = n->collapsed;
+        for (int i = 0; i < 2; i++)
+        {
+            auto &additional = i ? n->additionalInputs : n->additionalOutputs;
+            if (additional.empty()) continue;
+
+            json additionalJson;
+            for (auto &a : additional)
+            {
+                json aj;
+                aj["name"] = a->name;
+                aj["description"] = a->description;
+                aj["valType"] = a->valType->name;
+                additionalJson.push_back(aj);
+            }
+            nj[i ? "additionalInputs" : "additionalOutputs"] = additionalJson;
+        }
+
+        if (!n->children.empty()) nj["children"] = toJson(n->children);
+
+        json connections;
+        for (auto &conn : getOutputConnections(n))
+        {
+            json cj;
+            cj["input"] = conn.input->name;
+            cj["output"] = conn.output->name;
+            int dstNode;
+            for (dstNode = 0; dstNode < nodes.size(); dstNode++) if (nodes[dstNode] == conn.dstNode) break;
+            if (dstNode == nodes.size()) continue; // destination node not included in selection
+            cj["dstNode"] = dstNode;
+            connections.push_back(cj);
+        }
+        nj["outputConnections"] = connections;
+
+        out.push_back(nj);
+    }
+    return out;
+}
+
+Nodes NodeEditor::fromJson(json input, bool &success)
+{
+    Nodes nodes;
+    success = true;
+    for (json &nodej : input)
+    {
+        int id = nodej["id"];
+        if (nodes.size() < id + 1) nodes.resize(id + 1);
+
+        NodeType type;
+        for (auto &t : nodeTypes) if (t->name == nodej["type"]) type = t;
+        if (!type)
+        {
+            success = false;
+            return Nodes();
+        }
+
+        vec2 position = vec2(nodej["posX"], nodej["posY"]), size = vec2(nodej["sizeX"], nodej["sizeY"]);
+
+        Nodes children;
+        if (nodej.contains("children")) fromJson(nodej["children"], success);
+        if (!success) return Nodes();
+
+        std::vector<NodeConnector> additionalInputs, additionalOutputs;
+
+        for (int i = 0; i < 2; i++)
+        {
+            auto &additional = i ? additionalInputs : additionalOutputs;
+            json additionalj = nodej[i ? "additionalInputs" : "additionalOutputs"];
+
+            for (json &addj : additionalj)
+            {
+                NodeValueType valType;
+                for (auto &t : valueTypes) if (t->name == addj["valType"]) valType = t;
+                if (!valType)
+                {
+                    success = false;
+                    return Nodes();
+                }
+                NodeConnector connector = createNodeConnector({addj["name"], addj["description"], valType});
+                additional.push_back(connector);
+            }
+        }
+        nodes[id] = createNode({
+            type, position, size, nodej["collapsed"], additionalInputs, additionalOutputs, std::vector<Connection>(), children
+        });
+    }
+    for (json &nodej : input)
+    {
+        int id = nodej["id"];
+
+        for (json &connj : nodej["outputConnections"])
+        {
+            Connection conn;
+            conn.srcNode = nodes[id];
+            conn.dstNode = nodes[connj["dstNode"]];
+            conn.input = connectorByName(conn.dstNode, connj["input"]);
+            conn.output = connectorByName(conn.srcNode, connj["output"]);
+
+            nodes[id]->connections.push_back(conn);
+            conn.dstNode->connections.push_back(conn);
+        }
+    }
+    return nodes;
+}
+
+NodeConnector NodeEditor::connectorByName(Node n, std::string name)
+{
+    for (const auto& c : n->type->inputs) if (c->name == name) return c;
+    for (const auto& c : n->type->outputs) if (c->name == name) return c;
+    for (const auto& c : n->additionalInputs) if (c->name == name) return c;
+    for (const auto& c : n->additionalOutputs) if (c->name == name) return c;
+    return NULL;
 }
 

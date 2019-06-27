@@ -2,6 +2,9 @@
 #include "glm/glm.hpp"
 using namespace glm;
 
+#include "../json.hpp"
+using json = nlohmann::json;
+
 // implicit conversions for glm::vec2 <-> ImVec2
 #define IM_VEC2_CLASS_EXTRA \
         ImVec2(const vec2& f) { x = f.x; y = f.y; } \
