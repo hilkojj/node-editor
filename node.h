@@ -48,7 +48,7 @@ typedef std::vector<Node> Nodes;
 struct Connection
 {
     Node srcNode, dstNode;
-    NodeConnector output;
+    NodeConnector output, input;
 };
 
 
@@ -62,6 +62,11 @@ struct Node_
 
     std::vector<Connection> connections;
     Nodes children;
+
+    ~Node_()
+    {
+        std::cout << "Node destroyed\n";
+    }
 };
 
 static Node createNode(Node_ x) { return std::make_shared<Node_>(x); }

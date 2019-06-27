@@ -1,8 +1,8 @@
 #include <iostream>
 #include <algorithm>
+#include <GLFW/glfw3.h>
 
 #include "node_editor.h"
-#include <GLFW/glfw3.h>
 
 int nodeEditorI = 0;
 
@@ -14,23 +14,21 @@ NodeEditor::NodeEditor(Nodes nodes, std::vector<NodeType> nodeTypes)
 void NodeEditor::deleteNode(Node node)
 {
     activeNode = NULL;
-    for (int i = 0; i < nodes.size(); i++)
-    {
-        if (nodes[i] == node)
-        {
-            nodes[i] = nodes[nodes.size() - 1];
-            nodes.pop_back();
-        }
-    }
+    nodes.erase(
+        std::remove_if(
+            nodes.begin(), nodes.end(), [node](Node &n) { return n == node; }
+        ), nodes.end()
+    );
+    while (!node->connections.empty()) deleteConnection(node->connections.back());
 }
 
 // Try to find in the Haystack the Needle - ignore case
 bool findStringIC(const std::string &strHaystack, const std::string &strNeedle)
 {
     auto it = std::search(
-        strHaystack.begin(), strHaystack.end(),
-        strNeedle.begin(), strNeedle.end(),
-        [](char ch1, char ch2) { return std::toupper(ch1) == std::toupper(ch2); });
+            strHaystack.begin(), strHaystack.end(),
+            strNeedle.begin(), strNeedle.end(),
+            [](char ch1, char ch2) { return std::toupper(ch1) == std::toupper(ch2); });
     return (it != strHaystack.end());
 }
 
@@ -79,6 +77,7 @@ void NodeEditor::draw(ImDrawList *drawList)
 
     drawBackground(drawList);
     drawAddMenu();
+    drawConnections(drawList);
     hoveringNode = NULL;
     hoveringNodeI = -1;
     // updateNode() will set hoveringNode if needed:
@@ -90,6 +89,14 @@ void NodeEditor::draw(ImDrawList *drawList)
 
     hasFocus = ImGui::IsWindowFocused();
     prevMousePos = mousePos;
+
+    if (creatingConnection && !ImGui::IsMouseDown(0)) creatingConnection = NULL;
+    if (creatingConnection)
+    {
+        vec2 originPos = connectorPosition(creatingConnection->srcNode, creatingConnection->output);
+        vec2 dstPos = (mousePos - scroll + drawPos) * zoom;
+        drawList->AddBezierCurve(originPos, originPos + vec2(120 * zoom, 0), dstPos - vec2(120 * zoom, 0), dstPos, ImColor(vec4(1)), zoom * 3);
+    }
 }
 
 void NodeEditor::updateSelection(ImDrawList *drawList)
@@ -112,7 +119,7 @@ void NodeEditor::updateSelection(ImDrawList *drawList)
     else if (ImGui::IsMouseDown(0) && !currentlyDragging && !currentlyResizing && !multiSelect) selectedNodes.clear();
 
     selecting = false;
-    if (currentlyDragging || currentlyResizing || dragDelta.x + dragDelta.y == 0 || !ImGui::IsMouseDown(0)) return;
+    if (creatingConnection || currentlyDragging || currentlyResizing || dragDelta.x + dragDelta.y == 0 || !ImGui::IsMouseDown(0)) return;
     selecting = true;
 
     // get the selection rectangle:
@@ -138,11 +145,11 @@ void NodeEditor::updateNode(int i)
     Node node = nodes[i];
     ImRect nodeRect = getNodeRectangle(node);
     if (
-        hasFocus 
-        && nodeRect.Contains(ImGui::GetMousePos())
-        && (!currentlyDragging || currentlyDragging == node)
-        && (!currentlyResizing || currentlyResizing == node)
-    )
+            hasFocus
+            && nodeRect.Contains(ImGui::GetMousePos())
+            && (!currentlyDragging || currentlyDragging == node)
+            && (!currentlyResizing || currentlyResizing == node)
+            )
     {
         hoveringNode = node;
         hoveringNodeI = i;
@@ -160,18 +167,18 @@ void NodeEditor::drawNode(Node node, ImDrawList *drawList)
     // draw shadow using a hack:
     for (int i = 0; i < 8; i++)
         drawList->AddRectFilled(
-            nodeRect.Min - vec2(i),
-            nodeRect.Max + vec2(i),
-        ImColor(.0f, .0, .0, .07), rounding + i * 2, roundingFlags);
+                nodeRect.Min - vec2(i * 2),
+                nodeRect.Max + vec2(i * 2),
+                ImColor(.0f, .0, .0, .07), rounding + i * 2, roundingFlags);
     // node background:
     drawList->AddRectFilled(nodeRect.Min, nodeRect.Max, ImColor(.3f, .3, .35, .85), rounding, roundingFlags);
 
     resizeNode(node, drawList);
     // node outline:
-    drawList->AddRect(nodeRect.Min, nodeRect.Max, 
-        active || selected ? ImColor(.4f, .2, 1.) :
-        (hovering ? ImColor(.4f, .1, .6) : ImColor(.4f, .4, .4)),
-        rounding, roundingFlags, 2);
+    drawList->AddRect(nodeRect.Min, nodeRect.Max,
+                      active || selected ? ImColor(.4f, .2, 1.) :
+                      (hovering ? ImColor(.4f, .1, .6) : ImColor(.4f, .4, .4)),
+                      rounding, roundingFlags, 2);
     drawNodeConnectors(node, drawList);
     dragNode(node, drawList, rounding);
 
@@ -182,15 +189,15 @@ void NodeEditor::drawNode(Node node, ImDrawList *drawList)
     // draw collapse button (click on collapse-button is handled in dragNode()):
     if (node->collapsed)
         drawList->AddTriangleFilled(
-            nodeRect.Min + vec2(10) * zoom,
-            nodeRect.Min + vec2(20, 15) * zoom,
-            nodeRect.Min + vec2(10, 20) * zoom, ImColor(1.f, 1., 1., .5)
+                nodeRect.Min + vec2(10) * zoom,
+                nodeRect.Min + vec2(20, 15) * zoom,
+                nodeRect.Min + vec2(10, 20) * zoom, ImColor(1.f, 1., 1., .5)
         );
     else
         drawList->AddTriangleFilled(
-            nodeRect.Min + vec2(10, 11) * zoom,
-            nodeRect.Min + vec2(20, 11) * zoom,
-            nodeRect.Min + vec2(15, 21) * zoom, ImColor(1.f, 1., 1., .5)
+                nodeRect.Min + vec2(10, 11) * zoom,
+                nodeRect.Min + vec2(20, 11) * zoom,
+                nodeRect.Min + vec2(15, 21) * zoom, ImColor(1.f, 1., 1., .5)
         );
 
     if (active && ImGui::IsKeyPressed(GLFW_KEY_DELETE))
@@ -203,12 +210,12 @@ void NodeEditor::resizeNode(Node node, ImDrawList *drawList)
     ImRect nodeRect = getNodeRectangle(node);
     // Triangle (a, b, c) that can be dragged to resize node:
     ImVec2 a = ImVec2(nodeRect.Max.x, nodeRect.Max.y - 20 * zoom),
-        b = ImVec2(nodeRect.Max.x - 20 * zoom, nodeRect.Max.y),
-        c = nodeRect.Max;
-    bool mouseOverResizeTriangle = hoveringNode == node && !selecting && !currentlyDragging && ImTriangleContainsPoint(a, b, c, ImGui::GetMousePos());
+            b = ImVec2(nodeRect.Max.x - 20 * zoom, nodeRect.Max.y),
+            c = nodeRect.Max;
+    bool mouseOverResizeTriangle = hoveringNode == node && !creatingConnection && !selecting && !currentlyDragging && ImTriangleContainsPoint(a, b, c, ImGui::GetMousePos());
     drawList->AddTriangleFilled(
-        a, b, c, 
-        mouseOverResizeTriangle ? ImColor(.7f, .7, .7) : ImColor(.5f, .5, .5)
+            a, b, c,
+            mouseOverResizeTriangle ? ImColor(.7f, .7, .7) : ImColor(.5f, .5, .5)
     );
     if (mouseOverResizeTriangle || node == currentlyResizing)
     {
@@ -239,8 +246,8 @@ void NodeEditor::dragNode(Node node, ImDrawList *drawList, float dragBarRounding
         drawList->AddRectFilled(dragRect.Min, dragRect.Max, ImColor(.4f, .4, .4), dragBarRounding, dragBarRoundingFlags);
         drawList->AddRectFilled(ImVec2(dragRect.Min.x, dragRect.Min.y + 15 * zoom), dragRect.Max, ImColor(.37f, .37, .37));
     }
-    bool mouseOverDragBar = hoveringNode == node && !selecting && !currentlyResizing && dragRect.Contains(ImGui::GetMousePos());
-    
+    bool mouseOverDragBar = hoveringNode == node && !creatingConnection && !selecting && !currentlyResizing && dragRect.Contains(ImGui::GetMousePos());
+
     if (mouseOverDragBar || currentlyDragging == node)
     {
         if (!currentlyDragging)
@@ -273,10 +280,10 @@ void NodeEditor::dragNode(Node node, ImDrawList *drawList, float dragBarRounding
 
 void NodeEditor::drawNodeConnectors(Node node, ImDrawList *drawList)
 {
-    for (NodeConnector c : node->type->inputs) drawNodeConnector(node, c, drawList);
-    for (NodeConnector c : node->type->outputs) drawNodeConnector(node, c, drawList);
-    for (NodeConnector c : node->additionalInputs) drawNodeConnector(node, c, drawList);
-    for (NodeConnector c : node->additionalOutputs) drawNodeConnector(node, c, drawList);
+    for (const auto& c : node->type->inputs) drawNodeConnector(node, c, drawList);
+    for (const auto& c : node->type->outputs) drawNodeConnector(node, c, drawList);
+    for (const auto& c : node->additionalInputs) drawNodeConnector(node, c, drawList);
+    for (const auto& c : node->additionalOutputs) drawNodeConnector(node, c, drawList);
 }
 
 void NodeEditor::drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawList)
@@ -286,14 +293,65 @@ void NodeEditor::drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawL
     drawList->AddCircleFilled(pos, 6 * zoom, ImColor(c->valType->color));
     drawList->AddCircle(pos, 6 * zoom, ImColor((c->valType->color * vec3(.5))), 12, zoom);
 
-    std::cout << (mousePos - pos).length() << "\n";
-
     // show type of connector when hovering:
-    if ((mousePos - pos).length() < 10) ImGui::SetTooltip(c->valType->name.c_str());
+    bool hoveringConnector = hasFocus && length(vec2(ImGui::GetMousePos()) - pos) < 15 * zoom;
+
+    if (hoveringConnector) ImGui::SetTooltip(c->valType->name.c_str());
+
+    if (hoveringConnector && dragDelta.x + dragDelta.y != 0)
+    {
+        bool connIsInput = isInput(node, c); // is this connector on the left side of the node?
+        if (creatingConnection)
+        {
+            std::cout << "j1\n";
+            Connection connection = *creatingConnection;
+            connection.dstNode = node;
+            connection.input = c;
+            if (connIsInput && !isConencted(node, c))
+            {
+                connection.srcNode->connections.push_back(connection);
+                node->connections.push_back(connection);
+                bool createsLoop = containsLoop();
+                if (createsLoop || !ImGui::IsMouseReleased(0))
+                {
+                    if (createsLoop) ImGui::SetTooltip("creates infinite loop");
+
+                    connection.srcNode->connections.pop_back();
+                    node->connections.pop_back();
+                }
+                else
+                {
+                    creatingConnection = NULL;
+                    std::cout << "Connection created\n";
+                }
+            }
+        }
+        else if (!connIsInput)
+        {
+            creatingConnection = std::make_unique<Connection>(Connection{
+                    node, NULL,
+                    c, NULL
+            });
+            std::cout << "starting connection creation\n";
+        }
+    }
 
     if (node->collapsed) return;
     // show connector name:
     drawList->AddText(NULL, 13 * zoom, pos, ImColor(vec4(1)), c->name.c_str());
+}
+
+std::vector<Connection> NodeEditor::getOutputConnections(Node n)
+{
+    std::vector<Connection> c;
+    for (auto &conn : n->connections) if (conn.srcNode == n) c.push_back(conn);
+    return c;
+}
+
+std::vector<Connection> NodeEditor::getInputConnections(Node n) {
+    std::vector<Connection> c;
+    for (auto &conn : n->connections) if (conn.dstNode == n) c.push_back(conn);
+    return c;
 }
 
 vec2 NodeEditor::connectorPosition(Node node, NodeConnector conn)
@@ -336,8 +394,8 @@ bool NodeEditor::isInput(Node node, NodeConnector conn)
 
 ImRect NodeEditor::getNodeRectangle(Node node)
 {
-    ImRect rect(drawPos.x + node->position.x, drawPos.y + node->position.y, 
-        drawPos.x + node->position.x + node->size.x, drawPos.y + node->position.y + node->size.y);
+    ImRect rect(drawPos.x + node->position.x, drawPos.y + node->position.y,
+                drawPos.x + node->position.x + node->size.x, drawPos.y + node->position.y + node->size.y);
     if (node->collapsed)
         rect.Max.y = rect.Min.y + 30;
 
@@ -404,3 +462,86 @@ void NodeEditor::drawAddMenu()
         addPos = mousePos - scroll;
     }
 }
+
+bool NodeEditor::isConencted(Node n, NodeConnector c)
+{
+    for (auto &connection : getInputConnections(n))
+        if (connection.input == c) return true;
+    for (auto &connection : getOutputConnections(n))
+        if (connection.output == c) return true;
+    return false;
+}
+
+void NodeEditor::drawConnections(ImDrawList *drawList)
+{
+    for (auto &n : nodes)
+    {
+        ImColor outlineColor = n == activeNode ? ImColor(.4f, .2, 1.) : ImColor(vec4(vec3(.3), 1));
+        for (auto &c : getOutputConnections(n))
+        {
+            vec2 p0 = connectorPosition(n, c.output), p1 = connectorPosition(c.dstNode, c.input);
+            vec2 p0b = p0 + vec2(120 * zoom, 0), p1b = p1 + vec2(-120 * zoom, 0);
+            drawList->AddBezierCurve(p0, p0b, p1b, p1, outlineColor, zoom * 4);
+            drawList->AddBezierCurve(p0, p0b, p1b, p1, ImColor(vec4(1)), zoom * 2.5);
+        }
+    }
+}
+
+void moveNode(Node node, Nodes &from, Nodes &to)
+{
+    int i = 0;
+    for (i = from.size() - 1; i >= 0; i--) if (from[i] == node) break;
+    from[i] = from[from.size() - 1];
+    from.pop_back();
+    to.push_back(node);
+}
+
+bool containsNode(Node node, Nodes &list)
+{
+    for (auto &n : list) if (n == node) return true;
+    return false;
+}
+
+bool NodeEditor::containsLoop() // depth first search
+{
+    Nodes toVisit = nodes, visiting, visited;
+
+    while (!toVisit.empty())
+        if (detectLoopDfs(toVisit.back(), toVisit, visiting, visited))
+            return true;
+    return false;
+}
+
+bool NodeEditor::detectLoopDfs(Node curr, Nodes &toVisit, Nodes &visiting, Nodes &visited)
+{
+    moveNode(curr, toVisit, visiting);
+
+    for (auto &conn : getOutputConnections(curr))
+    {
+        Node neighbour = conn.dstNode;
+        if (containsNode(neighbour, visited)) continue;
+
+        if (containsNode(neighbour, visiting))
+            return true;
+        if (detectLoopDfs(neighbour, toVisit, visiting, visited))
+            return true;
+    }
+    moveNode(curr, visiting, visited);
+    return false;
+}
+
+void NodeEditor::deleteConnection(Connection &c)
+{
+    for (int i = 0; i < 2; i++)
+    {
+        Node n = i ? c.srcNode : c.dstNode;
+        n->connections.erase(
+            std::remove_if(
+                    n->connections.begin(), n->connections.end(), [c](auto &conn) {
+                        return c.srcNode == conn.srcNode && c.dstNode == conn.dstNode && c.input == conn.input && c.output == conn.output;
+                    }
+            ), n->connections.end()
+        );
+    }
+}
+

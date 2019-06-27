@@ -23,7 +23,11 @@ class NodeEditor
 
     void deleteNode(Node node);
 
+    void deleteConnection(Connection &c);
+
     bool isSelected(Node node);
+
+    bool containsLoop();
 
   private:
     bool hasFocus = false, multiSelect = false;
@@ -58,17 +62,30 @@ class NodeEditor
 
     void drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawList);
 
+    void drawConnections(ImDrawList *drawList);
+
     vec2 connectorPosition(Node node, NodeConnector c);
     bool isInput(Node node, NodeConnector c);
+    bool isConencted(Node n, NodeConnector c);
 
     ImRect getNodeRectangle(Node node);
 
     void updateZoom();
     void drawBackground(ImDrawList *drawList);
-    
+
     bool selecting = false;
     Nodes selectedNodes;
     void updateSelection(ImDrawList *drawList);
+
+    std::unique_ptr<Connection> creatingConnection;
+
+    // returns the connections that have this node as start/source/begin
+    std::vector<Connection> getOutputConnections(Node n);
+
+    // returns the connections that have this node as destination
+    std::vector<Connection> getInputConnections(Node n);
+
+    bool detectLoopDfs(Node curr, Nodes &toVisit, Nodes &visiting, Nodes &visited);
 
 };
 
