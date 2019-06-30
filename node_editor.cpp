@@ -12,11 +12,12 @@ NodeEditor::NodeEditor(Nodes nodes, std::vector<NodeType> nodeTypes, std::vector
     nodes(nodes), nodeTypes(nodeTypes), valueTypes(valueTypes),
     id("node_editor_" + (nodeEditorI++)), addMenuId((id + "_add_menu").c_str())
 {
+    createHistory();
 }
 
 void NodeEditor::deleteNode(Node node)
 {
-    activeNode = NULL;
+    activeNode = NULL; // todo kfhskfgjhfdkgjh
     nodes.erase(
         std::remove_if(
             nodes.begin(), nodes.end(), [node](Node &n) { return n == node; }
@@ -33,6 +34,13 @@ bool findStringIC(const std::string &strHaystack, const std::string &strNeedle)
             strNeedle.begin(), strNeedle.end(),
             [](char ch1, char ch2) { return std::toupper(ch1) == std::toupper(ch2); });
     return (it != strHaystack.end());
+}
+
+bool shortcutPressed(int key0, int key1)
+{
+    return (ImGui::IsKeyPressed(key0, false) && ImGui::IsKeyPressed(key1, false))
+           || (ImGui::IsKeyPressed(key0, false) && ImGui::IsKeyDown(key1))
+           || (ImGui::IsKeyDown(key0) && ImGui::IsKeyPressed(key1, false));
 }
 
 void NodeEditor::updateZoom()
@@ -77,6 +85,9 @@ void NodeEditor::draw(ImDrawList *drawList)
 
     drawPos = pos / zoom + scroll;
 
+    if (shortcutPressed(GLFW_KEY_LEFT_CONTROL, GLFW_KEY_Z)) undo();
+    if (shortcutPressed(GLFW_KEY_LEFT_CONTROL, GLFW_KEY_Y)) redo();
+
     drawBackground(drawList);
     drawAddMenu();
     drawConnections(drawList);
@@ -106,14 +117,8 @@ void NodeEditor::draw(ImDrawList *drawList)
     {
         if (selectedNodes.empty() && activeNode) deleteNode(activeNode);
         else for (auto &n : selectedNodes) deleteNode(n);
+        createHistory();
     }
-}
-
-bool shortcutPressed(int key0, int key1)
-{
-    return (ImGui::IsKeyPressed(key0, false) && ImGui::IsKeyPressed(key1, false))
-        || (ImGui::IsKeyPressed(key0, false) && ImGui::IsKeyDown(key1))
-        || (ImGui::IsKeyDown(key0) && ImGui::IsKeyPressed(key1, false));
 }
 
 void NodeEditor::updateSelection(ImDrawList *drawList)
@@ -135,12 +140,12 @@ void NodeEditor::updateSelection(ImDrawList *drawList)
     } // clear selection if user clicks on background:
     else if (ImGui::IsMouseDown(0) && !currentlyDragging && !currentlyResizing && !multiSelect) selectedNodes.clear();
 
-    if (shortcutPressed(GLFW_KEY_C, GLFW_KEY_LEFT_CONTROL))
+    if (shortcutPressed(GLFW_KEY_C, GLFW_KEY_LEFT_CONTROL) && hasFocus)
     {
         NodeEditor::copiedNodes = toJson(isSelected(activeNode) ? selectedNodes : Nodes{activeNode});
         std::cout << NodeEditor::copiedNodes << "\n";
     }
-    if (shortcutPressed(GLFW_KEY_V, GLFW_KEY_LEFT_CONTROL))
+    if (shortcutPressed(GLFW_KEY_V, GLFW_KEY_LEFT_CONTROL) && hasFocus)
     {
         bool success;
         Nodes pasted = fromJson(copiedNodes, success);
@@ -152,8 +157,9 @@ void NodeEditor::updateSelection(ImDrawList *drawList)
         if (!success) std::cout << "parsing nodes unsuccessful\n";
         selectedNodes = pasted;
         copiedNodes = toJson(pasted); // hack to give the next paste extra offset.
+        createHistory();
     }
-    if (ImGui::IsKeyDown(GLFW_KEY_A) && ImGui::IsKeyDown(GLFW_KEY_LEFT_CONTROL))
+    if (shortcutPressed(GLFW_KEY_A, GLFW_KEY_LEFT_CONTROL) && hasFocus)
         selectedNodes = nodes;
 
     selecting = false;
@@ -267,7 +273,11 @@ void NodeEditor::resizeNode(Node node, ImDrawList *drawList)
             node->size = nodeSizeBeforeResizing + dragDelta;
             if (node->size.x < 100) node->size.x = 100;
             if (node->size.y < 100) node->size.y = 100;
-        } else currentlyResizing = NULL;
+        } else
+        {
+            if (currentlyResizing == node) createHistory();
+            currentlyResizing = NULL;
+        }
     }
 }
 void NodeEditor::dragNode(Node node, ImDrawList *drawList, float dragBarRounding)
@@ -285,13 +295,9 @@ void NodeEditor::dragNode(Node node, ImDrawList *drawList, float dragBarRounding
 
     if (mouseOverDragBar || currentlyDragging == node)
     {
-        if (!currentlyDragging)
-        {
-            currentlyDragging = node;
-            ImGui::ResetMouseDragDelta();
-        }
         if (ImGui::IsMouseDown(0))
         {
+            currentlyDragging = node;
             if (isSelected(node)) // move each selected node:
                 for (auto n : selectedNodes) n->position += mousePos - prevMousePos;
             else
@@ -302,6 +308,7 @@ void NodeEditor::dragNode(Node node, ImDrawList *drawList, float dragBarRounding
         }
         else
         {
+            if (currentlyDragging == node) createHistory();
             currentlyDragging = NULL;
             ImGui::SetTooltip("%s", node->type->description.c_str());
 
@@ -349,14 +356,20 @@ void NodeEditor::drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawL
                 connection.srcNode->connections.push_back(connection);
                 node->connections.push_back(connection);
                 bool createsLoop = containsLoop();
-                if (createsLoop || !ImGui::IsMouseReleased(0))
+                bool typesMatch = c->valType->any || connection.output->valType->any || connection.output->valType->name == c->valType->name;
+                if (createsLoop || !ImGui::IsMouseReleased(0) || !typesMatch)
                 {
-                    if (createsLoop) ImGui::SetTooltip("creates infinite loop");
+                    if (!typesMatch) ImGui::SetTooltip("Invalid value type (%s -> %s)", connection.output->valType->name.c_str(), c->valType->name.c_str());
+                    if (createsLoop) ImGui::SetTooltip("Creates infinite loop");
 
                     connection.srcNode->connections.pop_back();
                     node->connections.pop_back();
                 }
-                else creatingConnection = NULL;
+                else
+                {
+                    creatingConnection = NULL;
+                    createHistory();
+                }
             }
         }
         else if (draggingConnector)
@@ -371,10 +384,12 @@ void NodeEditor::drawNodeConnector(Node node, NodeConnector c, ImDrawList *drawL
                 for (auto &connection : getInputConnections(node))
                 {
                     if (connection.input != c) continue;
+                    // pulling existing connection out of input connector:
                     deleteConnection(connection);
                     creatingConnection = std::make_unique<Connection>(connection);
                     creatingConnection->input = NULL;
                     creatingConnection->dstNode = NULL;
+                    createHistory();
                 }
             }
         }
@@ -485,6 +500,7 @@ void NodeEditor::drawAddMenu()
                 nodes.push_back(n);
                 activeNode = n;
                 selectedNodes.clear();
+                createHistory();
 
                 ImGui::CloseCurrentPopup();
             }
@@ -714,5 +730,43 @@ NodeConnector NodeEditor::connectorByName(Node n, std::string name)
     for (const auto& c : n->additionalInputs) if (c->name == name) return c;
     for (const auto& c : n->additionalOutputs) if (c->name == name) return c;
     return NULL;
+}
+
+void NodeEditor::createHistory()
+{
+    while (historyI != history.size() - 1)
+        history.pop_back();
+    history.push_back(toJson(nodes));
+    historyI = history.size() - 1;
+    if (history.size() > 128)
+    {
+        int erase = 12;
+        history.erase(history.begin(), history.begin() + erase);
+        historyI -= erase;
+    }
+}
+
+void NodeEditor::undo()
+{
+    if (historyI <= 0) return;
+    bool success;
+    Nodes oldNodes = fromJson(history[historyI - 1], success);
+    if (success)
+    {
+        historyI--;
+        nodes = oldNodes;
+    }
+}
+
+void NodeEditor::redo()
+{
+    if (historyI >= history.size() - 1) return;
+    bool success;
+    Nodes newerNodes = fromJson(history[historyI + 1], success);
+    if (success)
+    {
+        historyI++;
+        nodes = newerNodes;
+    }
 }
 

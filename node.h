@@ -12,6 +12,7 @@ struct NodeValueType_
 {
     std::string name;
     vec3 color;
+    bool any = false;
 };
 typedef std::shared_ptr<NodeValueType_> NodeValueType;
 

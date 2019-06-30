@@ -41,6 +41,13 @@ class NodeEditor
     vec2 mousePos, prevMousePos;
     vec2 dragDelta;
 
+    std::vector<json> history;
+    int historyI = -1;
+
+    void createHistory(); // must be called after something happened.
+    void undo();
+    void redo();
+
     // --- add node menu: ---
     std::string filter;
     const char *addMenuId;
